@@ -359,8 +359,8 @@ class ManagedStream(ManagedDownloadSource):
                         retries += 1
                         if retries > 5:
                             raise err
-                        await asyncio.sleep(1)
-                        log.info("Retrying (%i) blob %s for %s...", retries, blob_hash, self.claim_name)
+                        await asyncio.sleep(10)
+                        log.info("%s: Error when sending blob %s: %s. Retrying (%i)", self.claim_name, blob_hash[:8], err, retries)
                 sent.append(blob_hash)
                 self.reflector_progress = int((i + 1) / len(we_have) * 100)
                 log.info("Progress for %s: %i%% (%i/%i)", self.claim_name, self.reflector_progress, i + 1, len(we_have))
