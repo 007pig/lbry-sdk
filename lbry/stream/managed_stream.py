@@ -355,7 +355,7 @@ class ManagedStream(ManagedDownloadSource):
                     try:
                         await protocol.send_blob(blob_hash)
                         break
-                    except Exception as err:
+                    except (Exception, asyncio.CancelledError) as err:
                         retries += 1
                         if retries > 5:
                             raise err
