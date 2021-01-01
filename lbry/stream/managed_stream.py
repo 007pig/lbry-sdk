@@ -351,7 +351,7 @@ class ManagedStream(ManagedDownloadSource):
                      self.claim_name, self.claim_id)
             for i, blob_hash in enumerate(we_have):
                 retries = 0
-                while retries <= 5:
+                while True:
                     try:
                         await protocol.send_blob(blob_hash)
                         break
@@ -360,6 +360,7 @@ class ManagedStream(ManagedDownloadSource):
                         if retries > 5:
                             raise err
                         await asyncio.sleep(1)
+                        log.info("Retrying (%i) blob %s for %s...", retries, blob_hash, self.claim_name)
                 sent.append(blob_hash)
                 self.reflector_progress = int((i + 1) / len(we_have) * 100)
                 log.info("Progress for %s: %i%% (%i/%i)", self.claim_name, self.reflector_progress, i + 1, len(we_have))
