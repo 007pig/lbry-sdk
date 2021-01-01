@@ -182,14 +182,14 @@ class StreamManager(SourceManager):
                         batch.append(self.reflect_stream(stream))
                     if len(batch) >= self.config.concurrent_reflector_uploads:
                         log.debug("waiting for batch of %s reflecting streams", len(batch))
-                        await asyncio.gather(*batch, loop=self.loop)
+                        await asyncio.gather(*batch, loop=self.loop, return_exceptions=True)
                         log.debug("done processing %s streams", len(batch))
                         batch = []
                 if batch:
                     log.debug("waiting for batch of %s reflecting streams", len(batch))
-                    await asyncio.gather(*batch, loop=self.loop)
+                    await asyncio.gather(*batch, loop=self.loop, return_exceptions=True)
                     log.debug("done processing %s streams", len(batch))
-            await asyncio.sleep(300, loop=self.loop)
+            await asyncio.sleep(60, loop=self.loop)
 
     async def start(self):
         await super().start()

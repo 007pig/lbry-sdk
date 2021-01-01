@@ -20,3 +20,5 @@ trending*.log
 
 /.vscode
 /.gitignore
+
+/lbry-env

@@ -9,7 +9,7 @@ with open(os.path.join(BASE, 'README.md'), encoding='utf-8') as fh:
 
 PLYVEL = []
 if sys.platform.startswith('linux'):
-    PLYVEL.append('plyvel==1.0.5')
+    PLYVEL.append('plyvel==1.3.0')
 
 setup(
     name=__name__,
@@ -33,7 +33,7 @@ setup(
         ],
     },
     install_requires=[
-        'aiohttp==3.5.4',
+        'aiohttp==3.6.3',
         'aioupnp==0.0.18',
         'appdirs==1.4.3',
         'certifi>=2018.11.29',

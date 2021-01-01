@@ -141,3 +141,6 @@ class StreamReflectorClient(asyncio.Protocol):
                 log.info("Sent reflector blob %s", blob.blob_hash[:8])
             else:
                 log.warning("Reflector failed to receive blob %s", blob.blob_hash[:8])
+                raise asyncio.CancelledError()
+        else:
+            log.info("reflector blob exists %s", blob.blob_hash[:8])

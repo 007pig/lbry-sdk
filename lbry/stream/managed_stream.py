@@ -3,6 +3,7 @@ import asyncio
 import time
 import typing
 import logging
+import traceback
 from typing import Optional
 from aiohttp.web import Request, StreamResponse, HTTPRequestRangeNotSatisfiable
 from lbry.error import DownloadSDTimeoutError
@@ -349,14 +350,25 @@ class ManagedStream(ManagedDownloadSource):
             log.info("we have %i/%i needed blobs needed by reflector for lbry://%s#%s", len(we_have), len(needed),
                      self.claim_name, self.claim_id)
             for i, blob_hash in enumerate(we_have):
-                await protocol.send_blob(blob_hash)
+                retries = 0
+                while retries <= 5:
+                    try:
+                        await protocol.send_blob(blob_hash)
+                        break
+                    except Exception as err:
+                        retries += 1
+                        if retries > 5:
+                            raise err
+                        await asyncio.sleep(1)
                 sent.append(blob_hash)
                 self.reflector_progress = int((i + 1) / len(we_have) * 100)
+                log.info("Progress for %s: %i%% (%i/%i)", self.claim_name, self.reflector_progress, i + 1, len(we_have))
         except (asyncio.TimeoutError, ValueError):
             return sent
         except ConnectionRefusedError:
             return sent
         except (OSError, Exception) as err:
+            print(err)
             if isinstance(err, asyncio.CancelledError):
                 log.warning("stopped uploading %s#%s to reflector", self.claim_name, self.claim_id)
                 raise err
