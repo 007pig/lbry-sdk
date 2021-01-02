@@ -225,6 +225,7 @@ class StreamManager(SourceManager):
             try:
                 await self.reflect_stream(stream)
             finally:
+                log.info("%s task done", stream.claim_name)
                 queue.task_done()
 
     async def start(self):
