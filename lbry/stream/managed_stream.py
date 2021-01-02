@@ -361,6 +361,8 @@ class ManagedStream(ManagedDownloadSource):
                             raise err
                         await asyncio.sleep(10)
                         log.info("%s: Error when sending blob %s: %s. Retrying (%i)", self.claim_name, blob_hash[:8], repr(err), retries)
+                    except asyncio.CancelledError as err:
+                        raise err
                 sent.append(blob_hash)
                 self.reflector_progress = int((i + 1) / len(we_have) * 100)
                 log.info("Progress for %s: %i%% (%i/%i)", self.claim_name, self.reflector_progress, i + 1, len(we_have))
