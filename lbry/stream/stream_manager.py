@@ -166,30 +166,64 @@ class StreamManager(SourceManager):
         except Exception:
             log.exception("reflector task encountered an unexpected error!")
 
+    # async def _reflact_streams(self):
+    #     # todo: those debug statements are temporary for #2987 - remove them if its closed
+    #     while True:
+    #         if self.config.reflect_streams and self.config.reflector_servers:
+    #             log.debug("collecting streams to reflect")
+    #             sd_hashes = await self.storage.get_streams_to_re_reflect()
+    #             sd_hashes = [sd for sd in sd_hashes if sd in self._sources]
+    #             batch = []
+    #             while sd_hashes:
+    #                 stream = self.streams[sd_hashes.pop()]
+    #                 if self.blob_manager.is_blob_verified(stream.sd_hash) and stream.blobs_completed and \
+    #                         stream.sd_hash not in self.running_reflector_uploads and not \
+    #                         stream.fully_reflected.is_set():
+    #                     batch.append(self.reflect_stream(stream))
+    #                 if len(batch) >= self.config.concurrent_reflector_uploads:
+    #                     log.debug("waiting for batch of %s reflecting streams", len(batch))
+    #                     await asyncio.gather(*batch, loop=self.loop, return_exceptions=True)
+    #                     log.debug("done processing %s streams", len(batch))
+    #                     batch = []
+    #             if batch:
+    #                 log.debug("waiting for batch of %s reflecting streams", len(batch))
+    #                 await asyncio.gather(*batch, loop=self.loop, return_exceptions=True)
+    #                 log.debug("done processing %s streams", len(batch))
+    #         await asyncio.sleep(60, loop=self.loop)
+
     async def _reflact_streams(self):
-        # todo: those debug statements are temporary for #2987 - remove them if its closed
+        queue = asyncio.Queue()
+
+        # create workers
+        tasks = []
+        for _ in range(self.config.concurrent_reflector_uploads):
+            task = asyncio.create_task(self._reflact_stream_worker(queue))
+            tasks.append(task)
+
         while True:
             if self.config.reflect_streams and self.config.reflector_servers:
-                log.debug("collecting streams to reflect")
+                log.info("collecting streams to reflect")
                 sd_hashes = await self.storage.get_streams_to_re_reflect()
                 sd_hashes = [sd for sd in sd_hashes if sd in self._sources]
-                batch = []
                 while sd_hashes:
                     stream = self.streams[sd_hashes.pop()]
                     if self.blob_manager.is_blob_verified(stream.sd_hash) and stream.blobs_completed and \
                             stream.sd_hash not in self.running_reflector_uploads and not \
                             stream.fully_reflected.is_set():
-                        batch.append(self.reflect_stream(stream))
-                    if len(batch) >= self.config.concurrent_reflector_uploads:
-                        log.debug("waiting for batch of %s reflecting streams", len(batch))
-                        await asyncio.gather(*batch, loop=self.loop, return_exceptions=True)
-                        log.debug("done processing %s streams", len(batch))
-                        batch = []
-                if batch:
-                    log.debug("waiting for batch of %s reflecting streams", len(batch))
-                    await asyncio.gather(*batch, loop=self.loop, return_exceptions=True)
-                    log.debug("done processing %s streams", len(batch))
-            await asyncio.sleep(60, loop=self.loop)
+                        queue.put_nowait(stream)
+
+            queue_size = queue.qsize()
+            log.info("waiting for batch of %s reflecting streams", queue_size)
+            await queue.join()
+            log.info("done processing %s streams", queue_size)
+
+    async def _reflact_stream_worker(self, queue: asyncio.Queue):
+        while True:
+            stream = await queue.get()
+            try:
+                await self.reflect_stream(stream)
+            finally:
+                queue.task_done()
 
     async def start(self):
         await super().start()
