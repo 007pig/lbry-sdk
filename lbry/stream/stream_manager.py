@@ -217,6 +217,8 @@ class StreamManager(SourceManager):
             await queue.join()
             log.info("done processing %s streams", queue_size)
 
+            await asyncio.sleep(60, loop=self.loop)
+
     async def _reflact_stream_worker(self, queue: asyncio.Queue):
         while True:
             stream = await queue.get()
