@@ -226,8 +226,9 @@ class StreamManager(SourceManager):
                 await self.reflect_stream(stream)
             except (Exception, asyncio.CancelledError) as err:
                 log.info("%s reflect stream error: %s", stream.claim_name, repr(err))
-                # put stream back to queue
-                # queue.put_nowait(stream)
+                if not isinstance(err, OSError):
+                    # put stream back to queue
+                    queue.put_nowait(stream)
             finally:
                 log.info("%s task done", stream.claim_name)
                 queue.task_done()
