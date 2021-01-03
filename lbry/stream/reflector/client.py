@@ -131,7 +131,7 @@ class StreamReflectorClient(asyncio.Protocol):
                 if sent == -1:
                     log.warning("failed to send blob")
                     raise asyncio.CancelledError()
-                received = await asyncio.wait_for(self.response_queue.get(), 120)
+                received = await asyncio.wait_for(self.response_queue.get(), 30)
             except asyncio.CancelledError as err:
                 if self.transport:
                     self.transport.close()
