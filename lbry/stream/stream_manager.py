@@ -55,6 +55,7 @@ class StreamManager(SourceManager):
         self.update_stream_finished_futs: typing.List[asyncio.Future] = []
         self.running_reflector_uploads: typing.Dict[str, asyncio.Task] = {}
         self.started = asyncio.Event(loop=self.loop)
+        self.reflector_queue = asyncio.Queue()
 
     @property
     def streams(self):
@@ -192,12 +193,10 @@ class StreamManager(SourceManager):
     #         await asyncio.sleep(60, loop=self.loop)
 
     async def _reflact_streams(self):
-        queue = asyncio.Queue()
-
         # create workers
         tasks = []
         for _ in range(self.config.concurrent_reflector_uploads):
-            task = asyncio.create_task(self._reflact_stream_worker(queue))
+            task = asyncio.create_task(self._reflact_stream_worker())
             tasks.append(task)
 
         while True:
@@ -210,28 +209,28 @@ class StreamManager(SourceManager):
                     if self.blob_manager.is_blob_verified(stream.sd_hash) and stream.blobs_completed and \
                             stream.sd_hash not in self.running_reflector_uploads and not \
                             stream.fully_reflected.is_set():
-                        queue.put_nowait(stream)
+                        self.reflector_queue.put_nowait(stream)
 
-            queue_size = queue.qsize()
+            queue_size = self.reflector_queue.qsize()
             log.info("waiting for batch of %s reflecting streams", queue_size)
-            await queue.join()
+            await self.reflector_queue.join()
             log.info("done processing %s streams", queue_size)
 
             await asyncio.sleep(60, loop=self.loop)
 
-    async def _reflact_stream_worker(self, queue: asyncio.Queue):
+    async def _reflact_stream_worker(self):
         while True:
-            stream = await queue.get()
+            stream = await self.reflector_queue.get()
             try:
                 await self.reflect_stream(stream)
             except (Exception, asyncio.CancelledError) as err:
                 log.info("%s reflect stream error: %s", stream.claim_name, repr(err))
                 if not isinstance(err, OSError):
                     # put stream back to queue
-                    queue.put_nowait(stream)
+                    self.reflector_queue.put_nowait(stream)
             finally:
                 log.info("%s task done", stream.claim_name)
-                queue.task_done()
+                self.reflector_queue.task_done()
 
     async def start(self):
         await super().start()
@@ -285,7 +284,7 @@ class StreamManager(SourceManager):
         self.streams[stream.sd_hash] = stream
         self.storage.content_claim_callbacks[stream.stream_hash] = lambda: self._update_content_claim(stream)
         if self.config.reflect_streams and self.config.reflector_servers:
-            self.reflect_stream(stream)
+            self.reflector_queue.put_nowait(stream)
         return stream
 
     async def delete(self, source: ManagedDownloadSource, delete_file: Optional[bool] = False):
