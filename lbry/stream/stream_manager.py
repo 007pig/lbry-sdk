@@ -167,7 +167,7 @@ class StreamManager(SourceManager):
         except Exception:
             log.exception("reflector task encountered an unexpected error!")
 
-    # async def _reflact_streams(self):
+    # async def _reflect_streams(self):
     #     # todo: those debug statements are temporary for #2987 - remove them if its closed
     #     while True:
     #         if self.config.reflect_streams and self.config.reflector_servers:
@@ -192,7 +192,7 @@ class StreamManager(SourceManager):
     #                 log.debug("done processing %s streams", len(batch))
     #         await asyncio.sleep(60, loop=self.loop)
 
-    async def _reflact_streams(self):
+    async def _reflect_streams(self):
         # create workers
         tasks = []
         for _ in range(self.config.concurrent_reflector_uploads):
