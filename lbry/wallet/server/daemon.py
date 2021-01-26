@@ -6,7 +6,7 @@ from functools import wraps
 
 import aiohttp
 from prometheus_client import Gauge, Histogram
-from lbry.utils import LRUCache
+from lbry.utils import LRUCacheWithMetrics
 from lbry.wallet.rpc.jsonrpc import RPCError
 from lbry.wallet.server.util import hex_to_bytes, class_logger
 from lbry.wallet.rpc import JSONRPC
@@ -54,8 +54,8 @@ class Daemon:
         self._height = None
         self.available_rpcs = {}
         self.connector = aiohttp.TCPConnector()
-        self._block_hash_cache = LRUCache(100000)
-        self._block_cache = LRUCache(10000)
+        self._block_hash_cache = LRUCacheWithMetrics(100000)
+        self._block_cache = LRUCacheWithMetrics(2 ** 16, metric_name='block', namespace=NAMESPACE)
 
     async def close(self):
         if self.connector:
@@ -249,8 +249,10 @@ class Daemon:
 
     async def deserialised_block(self, hex_hash):
         """Return the deserialised block with the given hex hash."""
-        if not self._block_cache.get(hex_hash):
-            self._block_cache[hex_hash] = await self._send_single('getblock', (hex_hash, True))
+        if hex_hash not in self._block_cache:
+            block = await self._send_single('getblock', (hex_hash, True))
+            self._block_cache[hex_hash] = block
+            return block
         return self._block_cache[hex_hash]
 
     async def raw_blocks(self, hex_hashes):

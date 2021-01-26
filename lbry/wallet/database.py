@@ -124,6 +124,7 @@ class AIOSQLite:
 
         def __checkpoint_and_close(conn: sqlite3.Connection):
             conn.execute("PRAGMA WAL_CHECKPOINT(FULL);")
+            log.info("DB checkpoint finished.")
             conn.close()
         await asyncio.get_event_loop().run_in_executor(
             self.writer_executor, __checkpoint_and_close, self.writer_connection)
@@ -386,14 +387,31 @@ def interpolate(sql, values):
     return sql
 
 
-def constrain_single_or_list(constraints, column, value, convert=lambda x: x):
+def constrain_single_or_list(constraints, column, value, convert=lambda x: x, negate=False):
     if value is not None:
         if isinstance(value, list):
             value = [convert(v) for v in value]
             if len(value) == 1:
-                constraints[column] = value[0]
+                if negate:
+                    constraints[f"{column}__or"] = {
+                        f"{column}__is_null": True,
+                        f"{column}__not": value[0]
+                    }
+                else:
+                    constraints[column] = value[0]
             elif len(value) > 1:
-                constraints[f"{column}__in"] = value
+                if negate:
+                    constraints[f"{column}__or"] = {
+                        f"{column}__is_null": True,
+                        f"{column}__not_in": value
+                    }
+                else:
+                    constraints[f"{column}__in"] = value
+        elif negate:
+            constraints[f"{column}__or"] = {
+                f"{column}__is_null": True,
+                f"{column}__not": convert(value)
+            }
         else:
             constraints[column] = convert(value)
     return constraints

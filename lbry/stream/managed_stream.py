@@ -366,21 +366,20 @@ class ManagedStream(ManagedDownloadSource):
                 log.info("Progress for %s: %i%% (%i/%i)", self.claim_name, self.reflector_progress, i + 1, len(we_have))
         except (asyncio.TimeoutError, ValueError):
             return sent
-        except ConnectionRefusedError:
+        except ConnectionError:
             return sent
         except (OSError, Exception) as err:
             print(err)
             if isinstance(err, asyncio.CancelledError):
                 log.warning("stopped uploading %s#%s to reflector", self.claim_name, self.claim_id)
-                raise err
-            if isinstance(err, OSError):
+            elif isinstance(err, OSError):
                 log.warning(
                     "stopped uploading %s#%s to reflector because blobs were deleted or moved", self.claim_name,
                     self.claim_id
                 )
             else:
                 log.exception("unexpected error reflecting %s#%s", self.claim_name, self.claim_id)
-            raise asyncio.CancelledError()
+            return sent
         finally:
             if protocol.transport:
                 protocol.transport.close()

@@ -161,7 +161,7 @@ class StreamManager(SourceManager):
 
     async def reflect_streams(self):
         try:
-            return await self._reflact_streams()
+            return await self._reflect_streams()
         except asyncio.CancelledError:
             raise
         except Exception:
