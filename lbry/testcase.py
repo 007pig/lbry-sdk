@@ -29,7 +29,7 @@ from lbry.extras.daemon.components import (
 )
 from lbry.extras.daemon.componentmanager import ComponentManager
 from lbry.extras.daemon.exchange_rate_manager import (
-    ExchangeRateManager, ExchangeRate, LBRYFeed, LBRYBTCFeed
+    ExchangeRateManager, ExchangeRate, BittrexBTCFeed, BittrexUSDFeed
 )
 from lbry.extras.daemon.storage import SQLiteStorage
 from lbry.blob.blob_manager import BlobManager
@@ -282,8 +282,8 @@ class FakeExchangeRateManager(ExchangeRateManager):
 
 def get_fake_exchange_rate_manager(rates=None):
     return FakeExchangeRateManager(
-        [LBRYFeed(), LBRYBTCFeed()],
-        rates or {'BTCLBC': 3.0, 'USDBTC': 2.0}
+        [BittrexBTCFeed(), BittrexUSDFeed()],
+        rates or {'BTCLBC': 3.0, 'USDLBC': 2.0}
     )
 
 
@@ -410,7 +410,7 @@ class CommandTestCase(IntegrationTestCase):
         daemon = Daemon(conf, ComponentManager(
             conf, skip_components=conf.components_to_skip, wallet=wallet_maker,
             exchange_rate_manager=partial(ExchangeRateManagerComponent, rates={
-                'BTCLBC': 1.0, 'USDBTC': 2.0
+                'BTCLBC': 1.0, 'USDLBC': 2.0
             })
         ))
         await daemon.initialize()

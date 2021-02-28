@@ -2,6 +2,7 @@ import json
 import time
 import asyncio
 import logging
+from statistics import median
 from decimal import Decimal
 from typing import Optional, Iterable, Type
 from aiohttp.client_exceptions import ContentTypeError
@@ -58,9 +59,12 @@ class MarketFeed:
         raise NotImplementedError()
 
     async def get_response(self):
-        async with aiohttp_request('get', self.url, params=self.params, timeout=self.request_timeout) as response:
+        async with aiohttp_request(
+                'get', self.url, params=self.params,
+                timeout=self.request_timeout, headers={"User-Agent": "lbrynet"}
+        ) as response:
             try:
-                self._last_response = await response.json()
+                self._last_response = await response.json(content_type=None)
             except ContentTypeError as e:
                 self._last_response = {}
                 log.warning("Could not parse exchange rate response from %s: %s", self.name, e.message)
@@ -104,70 +108,115 @@ class MarketFeed:
         self.event.clear()
 
 
-class BittrexFeed(MarketFeed):
+class BaseBittrexFeed(MarketFeed):
     name = "Bittrex"
-    market = "BTCLBC"
-    url = "https://bittrex.com/api/v1.1/public/getmarkethistory"
-    params = {'market': 'BTC-LBC', 'count': 50}
+    market = None
+    url = None
     fee = 0.0025
 
     def get_rate_from_response(self, json_response):
-        if 'result' not in json_response:
+        if 'lastTradeRate' not in json_response:
             raise InvalidExchangeRateResponseError(self.name, 'result not found')
-        trades = json_response['result']
-        if len(trades) == 0:
-            raise InvalidExchangeRateResponseError(self.name, 'trades not found')
-        totals = sum([i['Total'] for i in trades])
-        qtys = sum([i['Quantity'] for i in trades])
-        if totals <= 0 or qtys <= 0:
-            raise InvalidExchangeRateResponseError(self.name, 'quantities were not positive')
-        vwap = totals / qtys
-        return float(1.0 / vwap)
+        return 1.0 / float(json_response['lastTradeRate'])
 
 
-class LBRYFeed(MarketFeed):
-    name = "lbry.com"
+class BittrexBTCFeed(BaseBittrexFeed):
     market = "BTCLBC"
-    url = "https://api.lbry.com/lbc/exchange_rate"
+    url = "https://api.bittrex.com/v3/markets/LBC-BTC/ticker"
+
+
+class BittrexUSDFeed(BaseBittrexFeed):
+    market = "USDLBC"
+    url = "https://api.bittrex.com/v3/markets/LBC-USD/ticker"
+
+
+class BaseCryptonatorFeed(MarketFeed):
+    name = "Cryptonator"
+    market = None
+    url = None
 
     def get_rate_from_response(self, json_response):
-        if 'data' not in json_response:
-            raise InvalidExchangeRateResponseError(self.name, 'result not found')
-        return 1.0 / json_response['data']['lbc_btc']
-
-
-class LBRYBTCFeed(LBRYFeed):
-    market = "USDBTC"
-
-    def get_rate_from_response(self, json_response):
-        if 'data' not in json_response:
-            raise InvalidExchangeRateResponseError(self.name, 'result not found')
-        return 1.0 / json_response['data']['btc_usd']
-
-
-class CryptonatorFeed(MarketFeed):
-    name = "cryptonator.com"
-    market = "BTCLBC"
-    url = "https://api.cryptonator.com/api/ticker/btc-lbc"
-
-    def get_rate_from_response(self, json_response):
-        if 'ticker' not in json_response or len(json_response['ticker']) == 0 or \
-                'success' not in json_response or json_response['success'] is not True:
+        if 'ticker' not in json_response or 'price' not in json_response['ticker']:
             raise InvalidExchangeRateResponseError(self.name, 'result not found')
         return float(json_response['ticker']['price'])
 
 
-class CryptonatorBTCFeed(CryptonatorFeed):
-    market = "USDBTC"
-    url = "https://api.cryptonator.com/api/ticker/usd-btc"
+class CryptonatorBTCFeed(BaseCryptonatorFeed):
+    market = "BTCLBC"
+    url = "https://api.cryptonator.com/api/ticker/btc-lbc"
+
+
+class CryptonatorUSDFeed(BaseCryptonatorFeed):
+    market = "USDLBC"
+    url = "https://api.cryptonator.com/api/ticker/usd-lbc"
+
+
+class BaseCoinExFeed(MarketFeed):
+    name = "CoinEx"
+    market = None
+    url = None
+
+    def get_rate_from_response(self, json_response):
+        if 'data' not in json_response or \
+           'ticker' not in json_response['data'] or \
+           'last' not in json_response['data']['ticker']:
+            raise InvalidExchangeRateResponseError(self.name, 'result not found')
+        return 1.0 / float(json_response['data']['ticker']['last'])
+
+
+class CoinExBTCFeed(BaseCoinExFeed):
+    market = "BTCLBC"
+    url = "https://api.coinex.com/v1/market/ticker?market=LBCBTC"
+
+
+class CoinExUSDFeed(BaseCoinExFeed):
+    market = "USDLBC"
+    url = "https://api.coinex.com/v1/market/ticker?market=LBCUSDT"
+
+
+class BaseHotbitFeed(MarketFeed):
+    name = "hotbit"
+    market = None
+    url = "https://api.hotbit.io/api/v1/market.last"
+
+    def get_rate_from_response(self, json_response):
+        if 'result' not in json_response:
+            raise InvalidExchangeRateResponseError(self.name, 'result not found')
+        return 1.0 / float(json_response['result'])
+
+
+class HotbitBTCFeed(BaseHotbitFeed):
+    market = "BTCLBC"
+    params = {"market": "LBC/BTC"}
+
+
+class HotbitUSDFeed(BaseHotbitFeed):
+    market = "USDLBC"
+    params = {"market": "LBC/USDT"}
+
+
+class UPbitBTCFeed(MarketFeed):
+    name = "UPbit"
+    market = "BTCLBC"
+    url = "https://api.upbit.com/v1/ticker"
+    params = {"markets": "BTC-LBC"}
+
+    def get_rate_from_response(self, json_response):
+        if len(json_response) != 1 or 'trade_price' not in json_response[0]:
+            raise InvalidExchangeRateResponseError(self.name, 'result not found')
+        return 1.0 / float(json_response[0]['trade_price'])
 
 
 FEEDS: Iterable[Type[MarketFeed]] = (
-    LBRYFeed,
-    LBRYBTCFeed,
-    BittrexFeed,
-    # CryptonatorFeed,
-    # CryptonatorBTCFeed,
+    BittrexBTCFeed,
+    BittrexUSDFeed,
+    CryptonatorBTCFeed,
+    CryptonatorUSDFeed,
+    CoinExBTCFeed,
+    CoinExUSDFeed,
+    HotbitBTCFeed,
+    HotbitUSDFeed,
+    UPbitBTCFeed,
 )
 
 
@@ -191,20 +240,23 @@ class ExchangeRateManager:
             source.stop()
 
     def convert_currency(self, from_currency, to_currency, amount):
-        rates = [market.rate for market in self.market_feeds]
-        log.debug("Converting %f %s to %s, rates: %s", amount, from_currency, to_currency, rates)
+        log.debug(
+            "Converting %f %s to %s, rates: %s",
+            amount, from_currency, to_currency,
+            [market.rate for market in self.market_feeds]
+        )
         if from_currency == to_currency:
             return round(amount, 8)
 
+        rates = []
         for market in self.market_feeds:
             if (market.has_rate and market.is_online and
                     market.rate.currency_pair == (from_currency, to_currency)):
-                return round(amount * Decimal(market.rate.spot), 8)
-        for market in self.market_feeds:
-            if (market.has_rate and market.is_online and
-                    market.rate.currency_pair[0] == from_currency):
-                return round(self.convert_currency(
-                    market.rate.currency_pair[1], to_currency, amount * Decimal(market.rate.spot)), 8)
+                rates.append(market.rate.spot)
+
+        if rates:
+            return round(amount * Decimal(median(rates)), 8)
+
         raise CurrencyConversionError(
             f'Unable to convert {amount} from {from_currency} to {to_currency}')
 

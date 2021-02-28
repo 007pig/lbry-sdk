@@ -999,7 +999,7 @@ class Daemon(metaclass=JSONRPCServerType):
 
         Options:
             --urls=<urls>              : (str, list) one or more urls to resolve
-            --wallet_id=<wallet_id>    : (str) wallet to check for claim purchase reciepts
+            --wallet_id=<wallet_id>    : (str) wallet to check for claim purchase receipts
            --new_sdk_server=<new_sdk_server> : (str) URL of the new SDK server (EXPERIMENTAL)
            --include_purchase_receipt  : (bool) lookup and include a receipt if this wallet
                                                 has purchased the claim being resolved
@@ -1112,7 +1112,7 @@ class Daemon(metaclass=JSONRPCServerType):
             --download_directory=<download_directory>  : (str) full path to the directory to download into
             --timeout=<timeout>      : (int) download timeout in number of seconds
             --save_file=<save_file>  : (bool) save the file to the downloads directory
-            --wallet_id=<wallet_id>  : (str) wallet to check for claim purchase reciepts
+            --wallet_id=<wallet_id>  : (str) wallet to check for claim purchase receipts
 
         Returns: {File}
         """
@@ -2295,7 +2295,7 @@ class Daemon(metaclass=JSONRPCServerType):
             --order_by=<order_by>      : (str) field to order by: 'name', 'height', 'amount'
             --no_totals                : (bool) do not calculate the total number of pages and items in result set
                                                 (significant performance boost)
-            --include_received_tips    : (bool) calculate the amount of tips recieved for claim outputs
+            --include_received_tips    : (bool) calculate the amount of tips received for claim outputs
 
         Returns: {Paginated[Output]}
         """
@@ -2372,7 +2372,7 @@ class Daemon(metaclass=JSONRPCServerType):
                          [--not_languages=<not_languages>...]
                          [--any_locations=<any_locations>...] [--all_locations=<all_locations>...]
                          [--not_locations=<not_locations>...]
-                         [--order_by=<order_by>...] [--page=<page>] [--page_size=<page_size>]
+                         [--order_by=<order_by>...] [--no_totals] [--page=<page>] [--page_size=<page_size>]
                          [--wallet_id=<wallet_id>] [--include_purchase_receipt] [--include_is_my_output]
                          [--new_sdk_server=<new_sdk_server>]
 
@@ -2451,7 +2451,7 @@ class Daemon(metaclass=JSONRPCServerType):
             --reposted_claim_id=<reposted_claim_id>: (str) all reposts of the specified original claim id
             --reposted=<reposted>           : (int) claims reposted this many times (supports
                                                     equality constraints)
-            --claim_type=<claim_type>       : (str) filter by 'channel', 'stream' or 'unknown'
+            --claim_type=<claim_type>       : (str) filter by 'channel', 'stream', 'repost' or 'collection'
             --stream_types=<stream_types>   : (list) filter by 'video', 'image', 'document', etc
             --media_types=<media_types>     : (list) filter by 'video/mp4', 'image/png', etc
             --fee_currency=<fee_currency>   : (string) specify fee currency: LBC, BTC, USD
@@ -2477,7 +2477,7 @@ class Daemon(metaclass=JSONRPCServerType):
                                                     'trending_local', 'trending_global', 'activation_height'
             --no_totals                     : (bool) do not calculate the total number of pages and items in result set
                                                      (significant performance boost)
-            --wallet_id=<wallet_id>         : (str) wallet to check for claim purchase reciepts
+            --wallet_id=<wallet_id>         : (str) wallet to check for claim purchase receipts
             --include_purchase_receipt      : (bool) lookup and include a receipt if this wallet
                                                      has purchased the claim
             --include_is_my_output          : (bool) lookup and include a boolean indicating
@@ -2617,6 +2617,7 @@ class Daemon(metaclass=JSONRPCServerType):
         )
         txo = tx.outputs[0]
         await txo.generate_channel_private_key()
+        tx._reset()
 
         await tx.sign(funding_accounts)
 
@@ -2773,6 +2774,7 @@ class Daemon(metaclass=JSONRPCServerType):
             new_txo.private_key = old_txo.private_key
 
         new_txo.script.generate()
+        tx._reset()
 
         await tx.sign(funding_accounts)
 
@@ -2808,7 +2810,12 @@ class Daemon(metaclass=JSONRPCServerType):
                                                              for channel certificates, defaults to all accounts.
             --wallet_id=<wallet_id>                  : (str) restrict operation to specific wallet
 
-        Returns: {}
+        Returns:
+            (dict) Signature if successfully made, (None) or an error otherwise
+            {
+                "signature":    (str) The signature of the comment,
+                "signing_ts":   (str) The timestamp used to sign the comment,
+            }
         """
         wallet = self.wallet_manager.get_wallet_or_default(wallet_id)
         assert not wallet.is_locked, "Cannot spend funds with locked wallet, unlock first."
@@ -3291,11 +3298,11 @@ class Daemon(metaclass=JSONRPCServerType):
             --duration=<duration>          : (int) audio/video duration in seconds, automatically calculated
             --channel_id=<channel_id>      : (str) claim id of the publisher channel
             --channel_name=<channel_name>  : (str) name of the publisher channel
-          --channel_account_id=<channel_account_id>: (str) one or more account ids for accounts to look in
+            --channel_account_id=<channel_account_id>: (str) one or more account ids for accounts to look in
                                                    for channel certificates, defaults to all accounts.
             --account_id=<account_id>      : (str) account to use for holding the transaction
             --wallet_id=<wallet_id>        : (str) restrict operation to specific wallet
-          --funding_account_ids=<funding_account_ids>: (list) ids of accounts to fund this transaction
+            --funding_account_ids=<funding_account_ids>: (list) ids of accounts to fund this transaction
             --claim_address=<claim_address>: (str) address where the claim is sent to, if not specified
                                                    it will be determined automatically from the account
             --preview                      : (bool) do not broadcast the transaction
@@ -3338,6 +3345,7 @@ class Daemon(metaclass=JSONRPCServerType):
             file_stream = await self.file_manager.create_stream(file_path)
             claim.stream.source.sd_hash = file_stream.sd_hash
             new_txo.script.generate()
+            tx._reset()
 
         if channel:
             new_txo.sign(channel)
@@ -3557,6 +3565,7 @@ class Daemon(metaclass=JSONRPCServerType):
                 file_stream = await self.file_manager.create_stream(file_path)
                 new_txo.claim.stream.source.sd_hash = file_stream.sd_hash
                 new_txo.script.generate()
+                tx._reset()
                 stream_hash = file_stream.stream_hash
             elif old_stream:
                 stream_hash = old_stream.stream_hash
@@ -3703,14 +3712,16 @@ class Daemon(metaclass=JSONRPCServerType):
 
         Usage:
             collection_create (<name> | --name=<name>) (<bid> | --bid=<bid>)
-                   (<claims>... | --claims=<claims>...)
-                   [--allow_duplicate_name]
-                   [--title=<title>] [--description=<description>]
-                   [--tags=<tags>...] [--languages=<languages>...] [--locations=<locations>...]
-                   [--thumbnail_url=<thumbnail_url>]
-                   [--account_id=<account_id>] [--wallet_id=<wallet_id>]
-                   [--claim_address=<claim_address>] [--funding_account_ids=<funding_account_ids>...]
-                   [--preview] [--blocking]
+                    (--claims=<claims>...)
+                    [--allow_duplicate_name]
+                    [--title=<title>] [--description=<description>]
+                    [--tags=<tags>...] [--languages=<languages>...] [--locations=<locations>...]
+                    [--thumbnail_url=<thumbnail_url>]
+                    [--channel_id=<channel_id> | --channel_name=<channel_name>]
+                    [--channel_account_id=<channel_account_id>...]
+                    [--account_id=<account_id>] [--wallet_id=<wallet_id>]
+                    [--claim_address=<claim_address>] [--funding_account_ids=<funding_account_ids>...]
+                    [--preview] [--blocking]
 
         Options:
             --name=<name>                  : (str) name of the collection
@@ -3761,6 +3772,10 @@ class Daemon(metaclass=JSONRPCServerType):
                                                           ... --locations="{'country': 'US', 'state': 'NH'}"
 
             --thumbnail_url=<thumbnail_url>: (str) thumbnail url
+            --channel_id=<channel_id>      : (str) claim id of the publisher channel
+            --channel_name=<channel_name>  : (str) name of the publisher channel
+            --channel_account_id=<channel_account_id>: (str) one or more account ids for accounts to look in
+                                                   for channel certificates, defaults to all accounts.
             --account_id=<account_id>      : (str) account to use for holding the transaction
             --wallet_id=<wallet_id>        : (str) restrict operation to specific wallet
             --funding_account_ids=<funding_account_ids>: (list) ids of accounts to fund this transaction
@@ -3824,7 +3839,7 @@ class Daemon(metaclass=JSONRPCServerType):
                            [--locations=<locations>...] [--clear_locations]
                            [--thumbnail_url=<thumbnail_url>] [--cover_url=<cover_url>]
                            [--account_id=<account_id>] [--wallet_id=<wallet_id>]
-                           [--claim_address=<claim_address>] [--new_signing_key]
+                           [--claim_address=<claim_address>]
                            [--funding_account_ids=<funding_account_ids>...]
                            [--preview] [--blocking] [--replace]
 
@@ -3882,7 +3897,6 @@ class Daemon(metaclass=JSONRPCServerType):
             --wallet_id=<wallet_id>        : (str) restrict operation to specific wallet
           --funding_account_ids=<funding_account_ids>: (list) ids of accounts to fund this transaction
             --claim_address=<claim_address>: (str) address where the collection is sent
-            --new_signing_key              : (bool) generate a new signing key, will invalidate all previous publishes
             --preview                      : (bool) do not broadcast the transaction
             --blocking                     : (bool) wait until transaction is in mempool
             --replace                      : (bool) instead of modifying specific values on
@@ -3947,6 +3961,7 @@ class Daemon(metaclass=JSONRPCServerType):
         new_txo = tx.outputs[0]
 
         new_txo.script.generate()
+        tx._reset()
 
         if channel:
             new_txo.sign(channel)
@@ -4412,7 +4427,7 @@ class Daemon(metaclass=JSONRPCServerType):
                                                 "--is_my_input --is_my_output --type=other"
                                                 this allows to exclude "change" payments, this
                                                 flag can be used in combination with any of the other flags
-            --include_received_tips    : (bool) calculate the amount of tips recieved for claim outputs
+            --include_received_tips    : (bool) calculate the amount of tips received for claim outputs
             --account_id=<account_id>  : (str) id of the account to query
             --wallet_id=<wallet_id>    : (str) restrict results to specific wallet
             --page=<page>              : (int) page to return during paginating
@@ -4451,7 +4466,7 @@ class Daemon(metaclass=JSONRPCServerType):
 
     @requires(WALLET_COMPONENT)
     async def jsonrpc_txo_spend(
-            self, account_id=None, wallet_id=None, batch_size=500,
+            self, account_id=None, wallet_id=None, batch_size=100,
             include_full_tx=False, preview=False, blocking=False, **kwargs):
         """
         Spend transaction outputs, batching into multiple transactions as necessary.
@@ -4490,7 +4505,10 @@ class Daemon(metaclass=JSONRPCServerType):
         accounts = [wallet.get_account_or_error(account_id)] if account_id else wallet.accounts
         txos = await self.ledger.get_txos(
             wallet=wallet, accounts=accounts, read_only=True,
-            **self._constrain_txo_from_kwargs({}, is_not_spent=True, is_my_output=True, **kwargs)
+            no_tx=True, no_channel_info=True,
+            **self._constrain_txo_from_kwargs(
+                {}, is_not_spent=True, is_my_output=True, **kwargs
+            )
         )
         txs = []
         while txos:
