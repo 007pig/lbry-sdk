@@ -119,13 +119,6 @@ STREAM_STAGES = [
     (DOWNLOAD_TIMEOUT_CODE, 'Stream timed out')
 ]
 
-CONNECTION_STATUS_CONNECTED = 'connected'
-CONNECTION_STATUS_NETWORK = 'network_connection'
-CONNECTION_MESSAGES = {
-    CONNECTION_STATUS_CONNECTED: 'No connection problems detected',
-    CONNECTION_STATUS_NETWORK: "Your internet connection appears to have been interrupted",
-}
-
 SHORT_ID_LEN = 20
 MAX_UPDATE_FEE_ESTIMATE = 0.3
 DEFAULT_PAGE_SIZE = 20
@@ -339,7 +332,6 @@ class Daemon(metaclass=JSONRPCServerType):
             skip_components=conf.components_to_skip or []
         )
         self.component_startup_task = None
-        self._connection_status: typing.Tuple[float, bool] = (self.component_manager.loop.time(), False)
 
         logging.getLogger('aiohttp.access').setLevel(logging.WARN)
         rpc_app = web.Application()
@@ -357,9 +349,6 @@ class Daemon(metaclass=JSONRPCServerType):
         prom_app = web.Application()
         prom_app.router.add_get('/metrics', self.handle_metrics_get_request)
         self.metrics_runner = web.AppRunner(prom_app)
-
-        self.need_connection_status_refresh = asyncio.Event()
-        self._connection_status_task: Optional[asyncio.Task] = None
 
     @property
     def dht_node(self) -> typing.Optional['Node']:
@@ -465,31 +454,10 @@ class Daemon(metaclass=JSONRPCServerType):
         if not os.path.isdir(self.conf.download_dir):
             os.makedirs(self.conf.download_dir)
 
-    async def update_connection_status(self):
-        connected = await utils.async_check_connection()
-        if connected and not self._connection_status[1]:
-            log.info("detected internet connection is working")
-        elif not connected and self._connection_status[1]:
-            log.warning("detected internet connection was lost")
-        self._connection_status = (self.component_manager.loop.time(), connected)
-
-    async def keep_connection_status_up_to_date(self):
-        while True:
-            try:
-                await asyncio.wait_for(self.need_connection_status_refresh.wait(), 300)
-            except asyncio.TimeoutError:
-                pass
-            await self.update_connection_status()
-            self.need_connection_status_refresh.clear()
-
     async def start(self):
         log.info("Starting LBRYNet Daemon")
         log.debug("Settings: %s", json.dumps(self.conf.settings_dict, indent=2))
         log.info("Platform: %s", json.dumps(self.platform_info, indent=2))
-        self.need_connection_status_refresh.set()
-        self._connection_status_task = self.component_manager.loop.create_task(
-            self.keep_connection_status_up_to_date()
-        )
 
         await self.analytics_manager.send_server_startup()
         await self.rpc_runner.setup()
@@ -549,10 +517,6 @@ class Daemon(metaclass=JSONRPCServerType):
         await self.component_startup_task
 
     async def stop(self):
-        if self._connection_status_task:
-            if not self._connection_status_task.done():
-                self._connection_status_task.cancel()
-            self._connection_status_task = None
         if self.component_startup_task is not None:
             if self.component_startup_task.done():
                 await self.component_manager.stop()
@@ -936,10 +900,6 @@ class Daemon(metaclass=JSONRPCServerType):
                 }
             }
         """
-
-        if not self._connection_status[1]:
-            self.need_connection_status_refresh.set()
-        connection_code = CONNECTION_STATUS_CONNECTED if self._connection_status[1] else CONNECTION_STATUS_NETWORK
         ffmpeg_status = await self._video_file_analyzer.status()
         running_components = self.component_manager.get_components_status()
         response = {
@@ -947,10 +907,6 @@ class Daemon(metaclass=JSONRPCServerType):
             'is_running': all(running_components.values()),
             'skipped_components': self.component_manager.skip_components,
             'startup_status': running_components,
-            'connection_status': {
-                'code': connection_code,
-                'message': CONNECTION_MESSAGES[connection_code],
-            },
             'ffmpeg_status': ffmpeg_status
         }
         for component in self.component_manager.components:
@@ -2374,6 +2330,7 @@ class Daemon(metaclass=JSONRPCServerType):
                          [--not_locations=<not_locations>...]
                          [--order_by=<order_by>...] [--no_totals] [--page=<page>] [--page_size=<page_size>]
                          [--wallet_id=<wallet_id>] [--include_purchase_receipt] [--include_is_my_output]
+                         [--has_source | --has_no_source]
                          [--new_sdk_server=<new_sdk_server>]
 
         Options:
@@ -2482,6 +2439,8 @@ class Daemon(metaclass=JSONRPCServerType):
                                                      has purchased the claim
             --include_is_my_output          : (bool) lookup and include a boolean indicating
                                                      if claim being resolved is yours
+            --has_source                    : (bool) find claims containing a source field
+            --has_no_source                 : (bool) find claims not containing a source field
            --new_sdk_server=<new_sdk_server> : (str) URL of the new SDK server (EXPERIMENTAL)
 
         Returns: {Paginated[Output]}
@@ -2493,6 +2452,8 @@ class Daemon(metaclass=JSONRPCServerType):
             kwargs['signature_valid'] = 1
         if kwargs.pop('invalid_channel_signature', False):
             kwargs['signature_valid'] = 0
+        if 'has_no_source' in kwargs:
+            kwargs['has_source'] = not kwargs.pop('has_no_source')
         page_num, page_size = abs(kwargs.pop('page', 1)), min(abs(kwargs.pop('page_size', DEFAULT_PAGE_SIZE)), 50)
         kwargs.update({'offset': page_size * (page_num - 1), 'limit': page_size})
         txos, blocked, _, total = await self.ledger.claim_search(wallet.accounts, **kwargs)
@@ -2617,7 +2578,6 @@ class Daemon(metaclass=JSONRPCServerType):
         )
         txo = tx.outputs[0]
         await txo.generate_channel_private_key()
-        tx._reset()
 
         await tx.sign(funding_accounts)
 
@@ -2774,7 +2734,6 @@ class Daemon(metaclass=JSONRPCServerType):
             new_txo.private_key = old_txo.private_key
 
         new_txo.script.generate()
-        tx._reset()
 
         await tx.sign(funding_accounts)
 
@@ -2908,7 +2867,7 @@ class Daemon(metaclass=JSONRPCServerType):
         Returns: {Paginated[Output]}
         """
         kwargs['type'] = 'channel'
-        if 'is_spent' not in kwargs:
+        if 'is_spent' not in kwargs or not kwargs['is_spent']:
             kwargs['is_not_spent'] = True
         return self.jsonrpc_txo_list(*args, **kwargs)
 
@@ -3121,8 +3080,6 @@ class Daemon(metaclass=JSONRPCServerType):
         if len(claims) == 0:
             if 'bid' not in kwargs:
                 raise Exception("'bid' is a required argument for new publishes.")
-            if 'file_path' not in kwargs:
-                raise Exception("'file_path' is a required argument for new publishes.")
             return await self.jsonrpc_stream_create(name, **kwargs)
         elif len(claims) == 1:
             assert claims[0].claim.is_stream, f"Claim at name '{name}' is not a stream claim."
@@ -3206,7 +3163,7 @@ class Daemon(metaclass=JSONRPCServerType):
 
     @requires(WALLET_COMPONENT, FILE_MANAGER_COMPONENT, BLOB_COMPONENT, DATABASE_COMPONENT)
     async def jsonrpc_stream_create(
-            self, name, bid, file_path, allow_duplicate_name=False,
+            self, name, bid, file_path=None, allow_duplicate_name=False,
             channel_id=None, channel_name=None, channel_account_id=None,
             account_id=None, wallet_id=None, claim_address=None, funding_account_ids=None,
             preview=False, blocking=False, validate_file=False, optimize_file=False, **kwargs):
@@ -3214,7 +3171,8 @@ class Daemon(metaclass=JSONRPCServerType):
         Make a new stream claim and announce the associated file to lbrynet.
 
         Usage:
-            stream_create (<name> | --name=<name>) (<bid> | --bid=<bid>) (<file_path> | --file_path=<file_path>)
+            stream_create (<name> | --name=<name>) (<bid> | --bid=<bid>)
+                    [<file_path> | --file_path=<file_path>]
                     [--validate_file] [--optimize_file]
                     [--allow_duplicate_name=<allow_duplicate_name>]
                     [--fee_currency=<fee_currency>] [--fee_amount=<fee_amount>] [--fee_address=<fee_address>]
@@ -3328,24 +3286,27 @@ class Daemon(metaclass=JSONRPCServerType):
                     f"Use --allow-duplicate-name flag to override."
                 )
 
-        file_path, spec = await self._video_file_analyzer.verify_or_repair(
-            validate_file, optimize_file, file_path, ignore_non_video=True
-        )
-        kwargs.update(spec)
+        if file_path is not None:
+            file_path, spec = await self._video_file_analyzer.verify_or_repair(
+                validate_file, optimize_file, file_path, ignore_non_video=True
+            )
+            kwargs.update(spec)
 
         claim = Claim()
-        claim.stream.update(file_path=file_path, sd_hash='0' * 96, **kwargs)
+        if file_path is not None:
+            claim.stream.update(file_path=file_path, sd_hash='0' * 96, **kwargs)
+        else:
+            claim.stream.update(**kwargs)
         tx = await Transaction.claim_create(
             name, claim, amount, claim_address, funding_accounts, funding_accounts[0], channel
         )
         new_txo = tx.outputs[0]
 
         file_stream = None
-        if not preview:
+        if not preview and file_path is not None:
             file_stream = await self.file_manager.create_stream(file_path)
             claim.stream.source.sd_hash = file_stream.sd_hash
             new_txo.script.generate()
-            tx._reset()
 
         if channel:
             new_txo.sign(channel)
@@ -3358,7 +3319,8 @@ class Daemon(metaclass=JSONRPCServerType):
                 await self.storage.save_claims([self._old_get_temp_claim_info(
                     tx, new_txo, claim_address, claim, name, dewies_to_lbc(amount)
                 )])
-                await self.storage.save_content_claim(file_stream.stream_hash, new_txo.id)
+                if file_path is not None:
+                    await self.storage.save_content_claim(file_stream.stream_hash, new_txo.id)
 
             self.component_manager.loop.create_task(save_claims())
             self.component_manager.loop.create_task(self.analytics_manager.send_claim_action('publish'))
@@ -3538,9 +3500,10 @@ class Daemon(metaclass=JSONRPCServerType):
 
         if replace:
             claim = Claim()
-            claim.stream.message.source.CopyFrom(
-                old_txo.claim.stream.message.source
-            )
+            if old_txo.claim.stream.has_source:
+                claim.stream.message.source.CopyFrom(
+                    old_txo.claim.stream.message.source
+                )
             stream_type = old_txo.claim.stream.stream_type
             if stream_type:
                 old_stream_type = getattr(old_txo.claim.stream.message, stream_type)
@@ -3565,7 +3528,6 @@ class Daemon(metaclass=JSONRPCServerType):
                 file_stream = await self.file_manager.create_stream(file_path)
                 new_txo.claim.stream.source.sd_hash = file_stream.sd_hash
                 new_txo.script.generate()
-                tx._reset()
                 stream_hash = file_stream.stream_hash
             elif old_stream:
                 stream_hash = old_stream.stream_hash
@@ -3960,9 +3922,6 @@ class Daemon(metaclass=JSONRPCServerType):
         )
         new_txo = tx.outputs[0]
 
-        new_txo.script.generate()
-        tx._reset()
-
         if channel:
             new_txo.sign(channel)
         await tx.sign(funding_accounts)
@@ -4000,15 +3959,18 @@ class Daemon(metaclass=JSONRPCServerType):
         return await self.jsonrpc_stream_abandon(*args, **kwargs)
 
     @requires(WALLET_COMPONENT)
-    def jsonrpc_collection_list(self, resolve_claims=0, account_id=None, wallet_id=None, page=None, page_size=None):
+    def jsonrpc_collection_list(
+            self, resolve_claims=0, resolve=False, account_id=None,
+            wallet_id=None, page=None, page_size=None):
         """
         List my collection claims.
 
         Usage:
-            collection_list [--resolve_claims=<resolve_claims>] [<account_id> | --account_id=<account_id>]
+            collection_list [--resolve_claims=<resolve_claims>] [--resolve] [<account_id> | --account_id=<account_id>]
                 [--wallet_id=<wallet_id>] [--page=<page>] [--page_size=<page_size>]
 
         Options:
+            --resolve                         : (bool) resolve collection claim
             --resolve_claims=<resolve_claims> : (int) resolve every claim
             --account_id=<account_id>         : (str) id of the account to use
             --wallet_id=<wallet_id>           : (str) restrict results to specific wallet
@@ -4025,7 +3987,10 @@ class Daemon(metaclass=JSONRPCServerType):
         else:
             collections = partial(self.ledger.get_collections, wallet=wallet, accounts=wallet.accounts)
             collection_count = partial(self.ledger.get_collection_count, wallet=wallet, accounts=wallet.accounts)
-        return paginate_rows(collections, collection_count, page, page_size, resolve_claims=resolve_claims)
+        return paginate_rows(
+            collections, collection_count, page, page_size,
+            resolve=resolve, resolve_claims=resolve_claims
+        )
 
     async def jsonrpc_collection_resolve(
             self, claim_id=None, url=None, wallet_id=None, page=1, page_size=DEFAULT_PAGE_SIZE):

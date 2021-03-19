@@ -158,6 +158,13 @@ class ClaimSearchCommand(ClaimTestCase):
         await self.stream_abandon(txid=signed2['txid'], nout=0)
         await self.assertFindsClaims([], channel_ids=[channel_id2])
 
+    async def test_source_filter(self):
+        no_source = await self.stream_create('no_source', data=None)
+        normal = await self.stream_create('normal', data=b'normal')
+        await self.assertFindsClaims([no_source], has_no_source=True)
+        await self.assertFindsClaims([normal], has_source=True)
+        await self.assertFindsClaims([normal, no_source])
+
     async def test_pagination(self):
         await self.create_channel()
         await self.create_lots_of_streams()
@@ -1844,9 +1851,6 @@ class StreamCommands(ClaimTestCase):
         with self.assertRaisesRegex(Exception, "'bid' is a required argument for new publishes."):
             await self.daemon.jsonrpc_publish('foo')
 
-        with self.assertRaisesRegex(Exception, "'file_path' is a required argument for new publishes."):
-            await self.daemon.jsonrpc_publish('foo', bid='1.0')
-
         # successfully create stream
         with tempfile.NamedTemporaryFile() as file:
             file.write(b'hi')
@@ -1888,6 +1892,38 @@ class StreamCommands(ClaimTestCase):
         self.assertNotIn('signing_channel', claim)
         self.assertEqual(claim['value']['languages'], ['uk-UA'])
         self.assertEqual(claim['value']['tags'], ['anime'])
+
+        # publish a stream with no source
+        tx5 = await self.publish(
+            'future-release', bid='0.1', languages='uk-UA', tags=['Anime', 'anime ']
+        )
+        self.assertItemCount(await self.daemon.jsonrpc_file_list(), 2)
+        claim = await self.resolve('lbry://future-release')
+        self.assertEqual(claim['txid'], tx5['outputs'][0]['txid'])
+        self.assertNotIn('signing_channel', claim)
+        self.assertEqual(claim['value']['languages'], ['uk-UA'])
+        self.assertEqual(claim['value']['tags'], ['anime'])
+        self.assertNotIn('source', claim['value'])
+
+        # change metadata before the release
+        await self.publish(
+            'future-release', bid='0.1', tags=['Anime', 'anime ', 'psy-trance'], title='Psy will be over 9000!!!'
+        )
+        self.assertItemCount(await self.daemon.jsonrpc_file_list(), 2)
+        claim = await self.resolve('lbry://future-release')
+        self.assertEqual(claim['value']['tags'], ['anime', 'psy-trance'])
+        self.assertEqual(claim['value']['title'], 'Psy will be over 9000!!!')
+        self.assertNotIn('source', claim['value'])
+
+        # update the stream to have a source
+        with tempfile.NamedTemporaryFile() as file:
+            file.write(b'hi')
+            file.flush()
+            tx6 = await self.publish('future-release', file_path=file.name, tags=['something-else'])
+        claim = await self.resolve('lbry://future-release')
+        self.assertEqual(claim['txid'], tx6['outputs'][0]['txid'])
+        self.assertEqual(claim['value']['tags'], ['something-else'])
+        self.assertIn('source', claim['value'])
 
 
 class SupportCommands(CommandTestCase):
@@ -1976,10 +2012,14 @@ class SupportCommands(CommandTestCase):
         self.assertTrue(txs[1]['support_info'][0]['is_tip'])
         self.assertTrue(txs[1]['support_info'][0]['is_spent'])
 
-    async def test_signed_supports(self):
+    async def test_signed_supports_with_no_change_txo_regression(self):
+        # reproduces a bug where transactions did not get properly signed
+        # if there was no change and just a single output
+        # lbrycrd returned 'the transaction was rejected by network rules.'
         channel_id = self.get_claim_id(await self.channel_create())
         stream_id = self.get_claim_id(await self.stream_create())
-        tx = await self.support_create(stream_id, '0.3', channel_id=channel_id)
+        tx = await self.support_create(stream_id, '7.967598', channel_id=channel_id)
+        self.assertEqual(len(tx['outputs']), 1)  # must be one to reproduce bug
         self.assertTrue(tx['outputs'][0]['is_channel_signature_valid'])
 
 
@@ -2025,6 +2065,10 @@ class CollectionCommands(CommandTestCase):
         await self.collection_update(claim_id, clear_claims=True, claims=claim_ids[:2])
         collections = await self.out(self.daemon.jsonrpc_collection_list())
         self.assertEquals(len(collections['items']), 2)
+        self.assertNotIn('canonical_url', collections['items'][0])
+
+        resolved_collections = await self.out(self.daemon.jsonrpc_collection_list(resolve=True))
+        self.assertIn('canonical_url', resolved_collections['items'][0])
 
         await self.collection_abandon(claim_id)
         self.assertItemCount(await self.daemon.jsonrpc_collection_list(), 1)
