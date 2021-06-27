@@ -33,6 +33,8 @@ class Env:
         self.allow_root = self.boolean('ALLOW_ROOT', False)
         self.host = self.default('HOST', 'localhost')
         self.rpc_host = self.default('RPC_HOST', 'localhost')
+        self.elastic_host = self.default('ELASTIC_HOST', 'localhost')
+        self.elastic_port = self.integer('ELASTIC_PORT', 9200)
         self.loop_policy = self.set_event_loop_policy()
         self.obsolete(['UTXO_MB', 'HIST_MB', 'NETWORK'])
         self.db_dir = self.required('DB_DIRECTORY')
@@ -53,6 +55,8 @@ class Env:
             coin_name = self.required('COIN').strip()
             network = self.default('NET', 'mainnet').strip()
             self.coin = Coin.lookup_coin_class(coin_name, network)
+        self.es_index_prefix = self.default('ES_INDEX_PREFIX', '')
+        self.es_mode = self.default('ES_MODE', 'writer')
         self.cache_MB = self.integer('CACHE_MB', 1200)
         self.reorg_limit = self.integer('REORG_LIMIT', self.coin.REORG_LIMIT)
         # Server stuff
@@ -69,6 +73,7 @@ class Env:
         self.tor_banner_file = self.default('TOR_BANNER_FILE', self.banner_file)
         self.anon_logs = self.boolean('ANON_LOGS', False)
         self.log_sessions = self.integer('LOG_SESSIONS', 3600)
+        self.allow_lan_udp = self.boolean('ALLOW_LAN_UDP', False)
         # Peer discovery
         self.peer_discovery = self.peer_discovery_enum()
         self.peer_announce = self.boolean('PEER_ANNOUNCE', True)
@@ -95,7 +100,7 @@ class Env:
         self.identities = [identity
                            for identity in (clearnet_identity, tor_identity)
                            if identity is not None]
-        self.database_query_timeout = float(self.integer('QUERY_TIMEOUT_MS', 250)) / 1000.0
+        self.database_query_timeout = float(self.integer('QUERY_TIMEOUT_MS', 3000)) / 1000.0
 
     @classmethod
     def default(cls, envvar, default):

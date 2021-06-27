@@ -84,6 +84,7 @@ class AsyncioTestCase(unittest.TestCase):
     #  https://bugs.python.org/issue32972
 
     LOOP_SLOW_CALLBACK_DURATION = 0.2
+    TIMEOUT = 120.0
 
     maxDiff = None
 
@@ -137,6 +138,8 @@ class AsyncioTestCase(unittest.TestCase):
                 with outcome.testPartExecutor(self, isTest=True):
                     maybe_coroutine = testMethod()
                     if asyncio.iscoroutine(maybe_coroutine):
+                        if self.TIMEOUT:
+                            self.loop.call_later(self.TIMEOUT, self.cancel)
                         self.loop.run_until_complete(maybe_coroutine)
                 outcome.expecting_failure = False
                 with outcome.testPartExecutor(self):
@@ -188,6 +191,12 @@ class AsyncioTestCase(unittest.TestCase):
                 maybe_coroutine = function(*args, **kwargs)
                 if asyncio.iscoroutine(maybe_coroutine):
                     self.loop.run_until_complete(maybe_coroutine)
+
+    def cancel(self):
+        for task in asyncio.all_tasks(self.loop):
+            if not task.done():
+                task.print_stack()
+                task.cancel()
 
 
 class AdvanceTimeTestCase(AsyncioTestCase):
@@ -439,8 +448,9 @@ class CommandTestCase(IntegrationTestCase):
 
     async def generate(self, blocks):
         """ Ask lbrycrd to generate some blocks and wait until ledger has them. """
+        prepare = self.ledger.on_header.where(self.blockchain.is_expected_block)
         await self.blockchain.generate(blocks)
-        await self.ledger.on_header.where(self.blockchain.is_expected_block)
+        await prepare  # no guarantee that it didn't happen already, so start waiting from before calling generate
 
     async def blockchain_claim_name(self, name: str, value: str, amount: str, confirm=True):
         txid = await self.blockchain._cli_cmnd('claimname', name, value, amount)
@@ -565,6 +575,11 @@ class CommandTestCase(IntegrationTestCase):
             kwargs['blocking'] = False
         return await self.confirm_and_render(
             self.daemon.jsonrpc_support_abandon(*args, **kwargs), confirm
+        )
+
+    async def account_send(self, *args, confirm=True, **kwargs):
+        return await self.confirm_and_render(
+            self.daemon.jsonrpc_account_send(*args, **kwargs), confirm
         )
 
     async def wallet_send(self, *args, confirm=True, **kwargs):

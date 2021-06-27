@@ -178,14 +178,24 @@ class Ledger(metaclass=LedgerRegistry):
         raw_address = cls.pubkey_address_prefix + h160
         return Base58.encode(bytearray(raw_address + double_sha256(raw_address)[0:4]))
 
+    @classmethod
+    def hash160_to_script_address(cls, h160):
+        raw_address = cls.script_address_prefix + h160
+        return Base58.encode(bytearray(raw_address + double_sha256(raw_address)[0:4]))
+
     @staticmethod
     def address_to_hash160(address):
         return Base58.decode(address)[1:21]
 
     @classmethod
-    def is_valid_address(cls, address):
+    def is_pubkey_address(cls, address):
         decoded = Base58.decode_check(address)
         return decoded[0] == cls.pubkey_address_prefix[0]
+
+    @classmethod
+    def is_script_address(cls, address):
+        decoded = Base58.decode_check(address)
+        return decoded[0] == cls.script_address_prefix[0]
 
     @classmethod
     def public_key_to_address(cls, public_key):
@@ -538,7 +548,7 @@ class Ledger(metaclass=LedgerRegistry):
                 "request %i transactions, %i/%i for %s are already synced", len(to_request), len(already_synced),
                 len(remote_history), address
             )
-            remote_history_txids = set(txid for txid, _ in remote_history)
+            remote_history_txids = {txid for txid, _ in remote_history}
             async for tx in self.request_synced_transactions(to_request, remote_history_txids, address):
                 pending_synced_history[tx_indexes[tx.id]] = f"{tx.id}:{tx.height}:"
                 if len(pending_synced_history) % 100 == 0:
@@ -713,8 +723,10 @@ class Ledger(metaclass=LedgerRegistry):
                     self.hash160_to_address(txi.txo_ref.txo.pubkey_hash)
                 )
         for txo in tx.outputs:
-            if txo.has_address:
+            if txo.is_pubkey_hash:
                 addresses.add(self.hash160_to_address(txo.pubkey_hash))
+            elif txo.is_script_hash:
+                addresses.add(self.hash160_to_script_address(txo.script_hash))
         start = int(time.perf_counter())
         while timeout and (int(time.perf_counter()) - start) <= timeout:
             if await self._wait_round(tx, height, addresses):
@@ -1060,7 +1072,7 @@ class Ledger(metaclass=LedgerRegistry):
                 'abandon_info': [],
                 'purchase_info': []
             }
-            is_my_inputs = all([txi.is_my_input for txi in tx.inputs])
+            is_my_inputs = all(txi.is_my_input for txi in tx.inputs)
             if is_my_inputs:
                 # fees only matter if we are the ones paying them
                 item['value'] = dewies_to_lbc(tx.net_account_balance + tx.fee)
@@ -1171,7 +1183,7 @@ class Ledger(metaclass=LedgerRegistry):
             balance = self._balance_cache.get(account.id)
             if not balance:
                 balance = self._balance_cache[account.id] = \
-                    await account.get_detailed_balance(confirmations, reserved_subtotals=True)
+                    await account.get_detailed_balance(confirmations)
             for key, value in balance.items():
                 if key == 'reserved_subtotals':
                     for subkey, subvalue in value.items():
@@ -1180,6 +1192,7 @@ class Ledger(metaclass=LedgerRegistry):
                     result[key] += value
         return result
 
+
 class TestNetLedger(Ledger):
     network_name = 'testnet'
     pubkey_address_prefix = bytes((111,))
@@ -1187,6 +1200,7 @@ class TestNetLedger(Ledger):
     extended_public_key_prefix = unhexlify('043587cf')
     extended_private_key_prefix = unhexlify('04358394')
     checkpoints = {}
+
 
 class RegTestLedger(Ledger):
     network_name = 'regtest'

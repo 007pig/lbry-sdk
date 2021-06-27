@@ -8,7 +8,7 @@ from lbry.wallet.server.server import Server
 
 def get_argument_parser():
     parser = argparse.ArgumentParser(
-        prog="torba-server"
+        prog="lbry-hub"
     )
     parser.add_argument("spvserver", type=str, help="Python class path to SPV server implementation.",
                         nargs="?", default="lbry.wallet.server.coin.LBC")
@@ -25,8 +25,10 @@ def main():
     parser = get_argument_parser()
     args = parser.parse_args()
     coin_class = get_coin_class(args.spvserver)
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-4s %(name)s:%(lineno)d: %(message)s")
     logging.info('lbry.server starting')
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    logging.getLogger('elasticsearch').setLevel(logging.WARNING)
     try:
         server = Server(Env(coin_class))
         server.run()

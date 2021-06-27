@@ -210,6 +210,15 @@ class MemPool:
 
         return deferred, {prevout: utxo_map[prevout] for prevout in unspent}
 
+    async def _mempool_loop(self, synchronized_event):
+        try:
+            return await self._refresh_hashes(synchronized_event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.exception("MEMPOOL DIED")
+            raise e
+
     async def _refresh_hashes(self, synchronized_event):
         """Refresh our view of the daemon's mempool."""
         while True:
@@ -315,7 +324,7 @@ class MemPool:
                          for prevout in tx.prevouts
                          if prevout[0] not in all_hashes)
         utxos = await self.api.lookup_utxos(prevouts)
-        utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
+        utxo_map = dict(zip(prevouts, utxos))
 
         return self._accept_transactions(tx_map, utxo_map, touched)
 
@@ -326,7 +335,7 @@ class MemPool:
     async def keep_synchronized(self, synchronized_event):
         """Keep the mempool synchronized with the daemon."""
         await asyncio.wait([
-            self._refresh_hashes(synchronized_event),
+            self._mempool_loop(synchronized_event),
             # self._refresh_histogram(synchronized_event),
             self._logging(synchronized_event)
         ])

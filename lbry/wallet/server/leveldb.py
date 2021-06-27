@@ -12,6 +12,7 @@
 import asyncio
 import array
 import ast
+import base64
 import os
 import time
 import zlib
@@ -82,6 +83,7 @@ class LevelDB:
         self.utxo_db = None
         self.tx_counts = None
         self.headers = None
+        self.encoded_headers = LRUCacheWithMetrics(1 << 21, metric_name='encoded_headers', namespace='wallet_server')
         self.last_flush = time.time()
 
         self.logger.info(f'using {self.env.db_engine} for DB backend')
@@ -135,9 +137,7 @@ class LevelDB:
             return
 
         def get_headers():
-            return [
-                header for header in self.headers_db.iterator(prefix=HEADER_PREFIX, include_key=False)
-            ]
+            return list(self.headers_db.iterator(prefix=HEADER_PREFIX, include_key=False))
 
         headers = await asyncio.get_event_loop().run_in_executor(self.executor, get_headers)
         assert len(headers) - 1 == self.db_height, f"{len(headers)} vs {self.db_height}"
@@ -440,6 +440,16 @@ class LevelDB:
             raise IndexError(f'height {height:,d} out of range')
         return header
 
+    def encode_headers(self, start_height, count, headers):
+        key = (start_height, count)
+        if not self.encoded_headers.get(key):
+            compressobj = zlib.compressobj(wbits=-15, level=1, memLevel=9)
+            headers = base64.b64encode(compressobj.compress(headers) + compressobj.flush()).decode()
+            if start_height % 1000 != 0:
+                return headers
+            self.encoded_headers[key] = headers
+        return self.encoded_headers.get(key)
+
     def read_headers(self, start_height, count) -> typing.Tuple[bytes, int]:
         """Requires start_height >= 0, count >= 0.  Reads as many headers as
         are available starting at start_height up to count.  This
@@ -466,7 +476,14 @@ class LevelDB:
         tx_height = bisect_right(self.tx_counts, tx_num)
         if tx_height > self.db_height:
             return None, tx_height
-        return self.total_transactions[tx_num], tx_height
+        try:
+            return self.total_transactions[tx_num], tx_height
+        except IndexError:
+            self.logger.exception(
+                "Failed to access a cached transaction, known bug #3142 "
+                "should be fixed in #3205"
+            )
+            return None, tx_height
 
     def _fs_transactions(self, txids: Iterable[str]):
         unpack_be_uint64 = util.unpack_be_uint64
